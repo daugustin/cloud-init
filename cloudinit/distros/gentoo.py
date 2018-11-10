@@ -74,12 +74,19 @@ class Distro(distros.Distro):
             if info.get('bootproto') == 'dhcp':
                 results += 'config_{name}="dhcp"'.format(name=dev)
             else:
-                results += (
-                    'config_{name}="{ip_address} netmask {netmask}"\n'
-                    'mac_{name}="{hwaddr}"\n'
-                ).format(name=dev, ip_address=info.get('address'),
-                         netmask=info.get('netmask'),
-                         hwaddr=info.get('hwaddress'))
+                if info.get('netmask') is not None:
+                    results += (
+                        'config_{name}="{ip_address} netmask {netmask}"\n'
+                    ).format(name=dev, ip_address=info.get('address'),
+                             netmask=info.get('netmask'))
+                else:
+                    results += (
+                        'config_{name}="{ip_address}"\n'
+                    ).format(name=dev, ip_address=info.get('address'))
+                if info.get('hwaddress') is not None:
+                    results += (
+                        'mac_{name}="{hwaddr}"\n'
+                    ).format(hwaddr=info.get('hwaddress'))
                 results += 'routes_{name}="default via {gateway}"\n'.format(
                     name=dev,
                     gateway=info.get('gateway')
