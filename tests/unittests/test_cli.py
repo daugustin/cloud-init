@@ -1,8 +1,8 @@
 # This file is part of cloud-init. See LICENSE file for license information.
 
-from collections import namedtuple
 import os
-import six
+import io
+from collections import namedtuple
 
 from cloudinit.cmd import main as cli
 from cloudinit.tests import helpers as test_helpers
@@ -18,7 +18,7 @@ class TestCLI(test_helpers.FilesystemMockingTestCase):
 
     def setUp(self):
         super(TestCLI, self).setUp()
-        self.stderr = six.StringIO()
+        self.stderr = io.StringIO()
         self.patchStdoutAndStderr(stderr=self.stderr)
 
     def _call_main(self, sysv_args=None):
@@ -147,7 +147,7 @@ class TestCLI(test_helpers.FilesystemMockingTestCase):
 
     def test_conditional_subcommands_from_entry_point_sys_argv(self):
         """Subcommands from entry-point are properly parsed from sys.argv."""
-        stdout = six.StringIO()
+        stdout = io.StringIO()
         self.patchStdoutAndStderr(stdout=stdout)
 
         expected_errors = [
@@ -178,7 +178,7 @@ class TestCLI(test_helpers.FilesystemMockingTestCase):
     def test_collect_logs_subcommand_parser(self):
         """The subcommand cloud-init collect-logs calls the subparser."""
         # Provide -h param to collect-logs to avoid having to mock behavior.
-        stdout = six.StringIO()
+        stdout = io.StringIO()
         self.patchStdoutAndStderr(stdout=stdout)
         self._call_main(['cloud-init', 'collect-logs', '-h'])
         self.assertIn('usage: cloud-init collect-log', stdout.getvalue())
@@ -186,7 +186,7 @@ class TestCLI(test_helpers.FilesystemMockingTestCase):
     def test_clean_subcommand_parser(self):
         """The subcommand cloud-init clean calls the subparser."""
         # Provide -h param to clean to avoid having to mock behavior.
-        stdout = six.StringIO()
+        stdout = io.StringIO()
         self.patchStdoutAndStderr(stdout=stdout)
         self._call_main(['cloud-init', 'clean', '-h'])
         self.assertIn('usage: cloud-init clean', stdout.getvalue())
@@ -194,7 +194,7 @@ class TestCLI(test_helpers.FilesystemMockingTestCase):
     def test_status_subcommand_parser(self):
         """The subcommand cloud-init status calls the subparser."""
         # Provide -h param to clean to avoid having to mock behavior.
-        stdout = six.StringIO()
+        stdout = io.StringIO()
         self.patchStdoutAndStderr(stdout=stdout)
         self._call_main(['cloud-init', 'status', '-h'])
         self.assertIn('usage: cloud-init status', stdout.getvalue())
@@ -219,7 +219,7 @@ class TestCLI(test_helpers.FilesystemMockingTestCase):
 
     def test_wb_devel_schema_subcommand_doc_content(self):
         """Validate that doc content is sane from known examples."""
-        stdout = six.StringIO()
+        stdout = io.StringIO()
         self.patchStdoutAndStderr(stdout=stdout)
         self._call_main(['cloud-init', 'devel', 'schema', '--doc'])
         expected_doc_sections = [
@@ -246,18 +246,18 @@ class TestCLI(test_helpers.FilesystemMockingTestCase):
         self.assertEqual('cc_ntp', parseargs.name)
         self.assertFalse(parseargs.report)
 
-    @mock.patch('cloudinit.cmd.main.dhclient_hook')
-    def test_dhclient_hook_subcommand(self, m_dhclient_hook):
+    @mock.patch('cloudinit.cmd.main.dhclient_hook.handle_args')
+    def test_dhclient_hook_subcommand(self, m_handle_args):
         """The subcommand 'dhclient-hook' calls dhclient_hook with args."""
-        self._call_main(['cloud-init', 'dhclient-hook', 'net_action', 'eth0'])
-        (name, parseargs) = m_dhclient_hook.call_args_list[0][0]
-        self.assertEqual('dhclient_hook', name)
+        self._call_main(['cloud-init', 'dhclient-hook', 'up', 'eth0'])
+        (name, parseargs) = m_handle_args.call_args_list[0][0]
+        self.assertEqual('dhclient-hook', name)
         self.assertEqual('dhclient-hook', parseargs.subcommand)
-        self.assertEqual('dhclient_hook', parseargs.action[0])
+        self.assertEqual('dhclient-hook', parseargs.action[0])
         self.assertFalse(parseargs.debug)
         self.assertFalse(parseargs.force)
-        self.assertEqual('net_action', parseargs.net_action)
-        self.assertEqual('eth0', parseargs.net_interface)
+        self.assertEqual('up', parseargs.event)
+        self.assertEqual('eth0', parseargs.interface)
 
     @mock.patch('cloudinit.cmd.main.main_features')
     def test_features_hook_subcommand(self, m_features):

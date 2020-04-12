@@ -5,12 +5,12 @@ import argparse
 import json
 import os
 import sys
-import yaml
 
 from cloudinit.sources.helpers import openstack
 from cloudinit.sources import DataSourceAzure as azure
+from cloudinit.sources import DataSourceOVF as ovf
 
-from cloudinit import distros
+from cloudinit import distros, safeyaml
 from cloudinit.net import eni, netplan, network_state, sysconfig
 from cloudinit import log
 
@@ -31,7 +31,7 @@ def get_parser(parser=None):
                         metavar="PATH", required=True)
     parser.add_argument("-k", "--kind",
                         choices=['eni', 'network_data.json', 'yaml',
-                                 'azure-imds'],
+                                 'azure-imds', 'vmware-imc'],
                         required=True)
     parser.add_argument("-d", "--directory",
                         metavar="PATH",
@@ -76,32 +76,30 @@ def handle_args(name, args):
     net_data = args.network_data.read()
     if args.kind == "eni":
         pre_ns = eni.convert_eni_data(net_data)
-        ns = network_state.parse_net_config_data(pre_ns)
     elif args.kind == "yaml":
-        pre_ns = yaml.load(net_data)
+        pre_ns = safeyaml.load(net_data)
         if 'network' in pre_ns:
             pre_ns = pre_ns.get('network')
         if args.debug:
             sys.stderr.write('\n'.join(
-                ["Input YAML",
-                 yaml.dump(pre_ns, default_flow_style=False, indent=4), ""]))
-        ns = network_state.parse_net_config_data(pre_ns)
+                ["Input YAML", safeyaml.dumps(pre_ns), ""]))
     elif args.kind == 'network_data.json':
         pre_ns = openstack.convert_net_json(
             json.loads(net_data), known_macs=known_macs)
-        ns = network_state.parse_net_config_data(pre_ns)
     elif args.kind == 'azure-imds':
         pre_ns = azure.parse_network_config(json.loads(net_data))
-        ns = network_state.parse_net_config_data(pre_ns)
+    elif args.kind == 'vmware-imc':
+        config = ovf.Config(ovf.ConfigFile(args.network_data.name))
+        pre_ns = ovf.get_network_config_from_conf(config, False)
 
+    ns = network_state.parse_net_config_data(pre_ns)
     if not ns:
         raise RuntimeError("No valid network_state object created from"
-                           "input data")
+                           " input data")
 
     if args.debug:
-        sys.stderr.write('\n'.join([
-            "", "Internal State",
-            yaml.dump(ns, default_flow_style=False, indent=4), ""]))
+        sys.stderr.write('\n'.join(
+            ["", "Internal State", safeyaml.dumps(ns), ""]))
     distro_cls = distros.fetch(args.distro)
     distro = distro_cls(args.distro, {}, None)
     config = {}
@@ -111,6 +109,12 @@ def handle_args(name, args):
     elif args.output_kind == "netplan":
         r_cls = netplan.Renderer
         config = distro.renderer_configs.get('netplan')
+        # don't run netplan generate/apply
+        config['postcmds'] = False
+        # trim leading slash
+        config['netplan_path'] = config['netplan_path'][1:]
+        # enable some netplan features
+        config['features'] = ['dhcp-use-domains', 'ipv6-mtu']
     else:
         r_cls = sysconfig.Renderer
         config = distro.renderer_configs.get('sysconfig')

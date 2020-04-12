@@ -10,7 +10,7 @@ from cloudinit.tests.helpers import CiTestCase, mock, skipUnlessJsonSchema
 
 from copy import copy
 import os
-from six import StringIO
+from io import StringIO
 from textwrap import dedent
 from yaml import safe_load
 
@@ -28,6 +28,7 @@ class GetSchemaTest(CiTestCase):
                 'cc_runcmd',
                 'cc_snap',
                 'cc_ubuntu_advantage',
+                'cc_ubuntu_drivers',
                 'cc_zypper_add_repo'
             ],
             [subschema['id'] for subschema in schema['allOf']])
@@ -344,12 +345,10 @@ class MainTest(CiTestCase):
 
     def test_main_missing_args(self):
         """Main exits non-zero and reports an error on missing parameters."""
-        with mock.patch('sys.exit', side_effect=self.sys_exit):
-            with mock.patch('sys.argv', ['mycmd']):
-                with mock.patch('sys.stderr', new_callable=StringIO) as \
-                        m_stderr:
-                    with self.assertRaises(SystemExit) as context_manager:
-                        main()
+        with mock.patch('sys.argv', ['mycmd']):
+            with mock.patch('sys.stderr', new_callable=StringIO) as m_stderr:
+                with self.assertRaises(SystemExit) as context_manager:
+                    main()
         self.assertEqual(1, context_manager.exception.code)
         self.assertEqual(
             'Expected either --config-file argument or --doc\n',
@@ -358,12 +357,10 @@ class MainTest(CiTestCase):
     def test_main_absent_config_file(self):
         """Main exits non-zero when config file is absent."""
         myargs = ['mycmd', '--annotate', '--config-file', 'NOT_A_FILE']
-        with mock.patch('sys.exit', side_effect=self.sys_exit):
-            with mock.patch('sys.argv', myargs):
-                with mock.patch('sys.stderr', new_callable=StringIO) as \
-                        m_stderr:
-                    with self.assertRaises(SystemExit) as context_manager:
-                        main()
+        with mock.patch('sys.argv', myargs):
+            with mock.patch('sys.stderr', new_callable=StringIO) as m_stderr:
+                with self.assertRaises(SystemExit) as context_manager:
+                    main()
         self.assertEqual(1, context_manager.exception.code)
         self.assertEqual(
             'Configfile NOT_A_FILE does not exist\n',

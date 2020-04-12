@@ -1,7 +1,10 @@
 # This file is part of cloud-init. See LICENSE file for license information.
 
 from cloudinit import helpers
-from cloudinit.sources import DataSourceNoCloud
+from cloudinit.sources.DataSourceNoCloud import (
+    DataSourceNoCloud as dsNoCloud,
+    _maybe_remove_top_network,
+    parse_cmdline_data)
 from cloudinit import util
 from cloudinit.tests.helpers import CiTestCase, populate_dir, mock, ExitStack
 
@@ -29,6 +32,36 @@ class TestNoCloudDataSource(CiTestCase):
         self.mocks.enter_context(
             mock.patch.object(util, 'read_dmi_data', return_value=None))
 
+    def _test_fs_config_is_read(self, fs_label, fs_label_to_search):
+        vfat_device = 'device-1'
+
+        def m_mount_cb(device, callback, mtype):
+            if (device == vfat_device):
+                return {'meta-data': yaml.dump({'instance-id': 'IID'})}
+            else:
+                return {}
+
+        def m_find_devs_with(query='', path=''):
+            if 'TYPE=vfat' == query:
+                return [vfat_device]
+            elif 'LABEL={}'.format(fs_label) == query:
+                return [vfat_device]
+            else:
+                return []
+
+        self.mocks.enter_context(
+            mock.patch.object(util, 'find_devs_with',
+                              side_effect=m_find_devs_with))
+        self.mocks.enter_context(
+            mock.patch.object(util, 'mount_cb',
+                              side_effect=m_mount_cb))
+        sys_cfg = {'datasource': {'NoCloud': {'fs_label': fs_label_to_search}}}
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        ret = dsrc.get_data()
+
+        self.assertEqual(dsrc.metadata.get('instance-id'), 'IID')
+        self.assertTrue(ret)
+
     def test_nocloud_seed_dir_on_lxd(self, m_is_lxd):
         md = {'instance-id': 'IID', 'dsmode': 'local'}
         ud = b"USER_DATA_HERE"
@@ -40,9 +73,7 @@ class TestNoCloudDataSource(CiTestCase):
             'datasource': {'NoCloud': {'fs_label': None}}
         }
 
-        ds = DataSourceNoCloud.DataSourceNoCloud
-
-        dsrc = ds(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
         ret = dsrc.get_data()
         self.assertEqual(dsrc.userdata_raw, ud)
         self.assertEqual(dsrc.metadata, md)
@@ -63,9 +94,7 @@ class TestNoCloudDataSource(CiTestCase):
             'datasource': {'NoCloud': {'fs_label': None}}
         }
 
-        ds = DataSourceNoCloud.DataSourceNoCloud
-
-        dsrc = ds(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
         self.assertTrue(dsrc.get_data())
         self.assertEqual(dsrc.platform_type, 'nocloud')
         self.assertEqual(
@@ -73,8 +102,6 @@ class TestNoCloudDataSource(CiTestCase):
 
     def test_fs_label(self, m_is_lxd):
         # find_devs_with should not be called ff fs_label is None
-        ds = DataSourceNoCloud.DataSourceNoCloud
-
         class PsuedoException(Exception):
             pass
 
@@ -84,26 +111,35 @@ class TestNoCloudDataSource(CiTestCase):
 
         # by default, NoCloud should search for filesystems by label
         sys_cfg = {'datasource': {'NoCloud': {}}}
-        dsrc = ds(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
         self.assertRaises(PsuedoException, dsrc.get_data)
 
         # but disabling searching should just end up with None found
         sys_cfg = {'datasource': {'NoCloud': {'fs_label': None}}}
-        dsrc = ds(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
         ret = dsrc.get_data()
         self.assertFalse(ret)
+
+    def test_fs_config_lowercase_label(self, m_is_lxd):
+        self._test_fs_config_is_read('cidata', 'cidata')
+
+    def test_fs_config_uppercase_label(self, m_is_lxd):
+        self._test_fs_config_is_read('CIDATA', 'cidata')
+
+    def test_fs_config_lowercase_label_search_uppercase(self, m_is_lxd):
+        self._test_fs_config_is_read('cidata', 'CIDATA')
+
+    def test_fs_config_uppercase_label_search_uppercase(self, m_is_lxd):
+        self._test_fs_config_is_read('CIDATA', 'CIDATA')
 
     def test_no_datasource_expected(self, m_is_lxd):
         # no source should be found if no cmdline, config, and fs_label=None
         sys_cfg = {'datasource': {'NoCloud': {'fs_label': None}}}
 
-        ds = DataSourceNoCloud.DataSourceNoCloud
-        dsrc = ds(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
         self.assertFalse(dsrc.get_data())
 
     def test_seed_in_config(self, m_is_lxd):
-        ds = DataSourceNoCloud.DataSourceNoCloud
-
         data = {
             'fs_label': None,
             'meta-data': yaml.safe_dump({'instance-id': 'IID'}),
@@ -111,7 +147,7 @@ class TestNoCloudDataSource(CiTestCase):
         }
 
         sys_cfg = {'datasource': {'NoCloud': data}}
-        dsrc = ds(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
         ret = dsrc.get_data()
         self.assertEqual(dsrc.userdata_raw, b"USER_DATA_RAW")
         self.assertEqual(dsrc.metadata.get('instance-id'), 'IID')
@@ -130,9 +166,7 @@ class TestNoCloudDataSource(CiTestCase):
             'datasource': {'NoCloud': {'fs_label': None}}
         }
 
-        ds = DataSourceNoCloud.DataSourceNoCloud
-
-        dsrc = ds(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
         ret = dsrc.get_data()
         self.assertEqual(dsrc.userdata_raw, ud)
         self.assertEqual(dsrc.metadata, md)
@@ -145,9 +179,7 @@ class TestNoCloudDataSource(CiTestCase):
 
         sys_cfg = {'datasource': {'NoCloud': {'fs_label': None}}}
 
-        ds = DataSourceNoCloud.DataSourceNoCloud
-
-        dsrc = ds(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
         ret = dsrc.get_data()
         self.assertEqual(dsrc.userdata_raw, b"ud")
         self.assertFalse(dsrc.vendordata)
@@ -174,9 +206,7 @@ class TestNoCloudDataSource(CiTestCase):
 
         sys_cfg = {'datasource': {'NoCloud': {'fs_label': None}}}
 
-        ds = DataSourceNoCloud.DataSourceNoCloud
-
-        dsrc = ds(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
         ret = dsrc.get_data()
         self.assertTrue(ret)
         # very simple check just for the strings above
@@ -195,9 +225,23 @@ class TestNoCloudDataSource(CiTestCase):
 
         sys_cfg = {'datasource': {'NoCloud': {'fs_label': None}}}
 
-        ds = DataSourceNoCloud.DataSourceNoCloud
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        ret = dsrc.get_data()
+        self.assertTrue(ret)
+        self.assertEqual(netconf, dsrc.network_config)
 
-        dsrc = ds(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+    def test_metadata_network_config_with_toplevel_network(self, m_is_lxd):
+        """network-config may have 'network' top level key."""
+        netconf = {'config': 'disabled'}
+        populate_dir(
+            os.path.join(self.paths.seed_dir, "nocloud"),
+            {'user-data': b"ud",
+             'meta-data': "instance-id: IID\n",
+             'network-config': yaml.dump({'network': netconf}) + "\n"})
+
+        sys_cfg = {'datasource': {'NoCloud': {'fs_label': None}}}
+
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
         ret = dsrc.get_data()
         self.assertTrue(ret)
         self.assertEqual(netconf, dsrc.network_config)
@@ -228,13 +272,29 @@ class TestNoCloudDataSource(CiTestCase):
 
         sys_cfg = {'datasource': {'NoCloud': {'fs_label': None}}}
 
-        ds = DataSourceNoCloud.DataSourceNoCloud
-
-        dsrc = ds(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
         ret = dsrc.get_data()
         self.assertTrue(ret)
         self.assertEqual(netconf, dsrc.network_config)
         self.assertNotIn(gateway, str(dsrc.network_config))
+
+    @mock.patch("cloudinit.util.blkid")
+    def test_nocloud_get_devices_freebsd(self, m_is_lxd, fake_blkid):
+        populate_dir(os.path.join(self.paths.seed_dir, "nocloud"),
+                     {'user-data': b"ud", 'meta-data': "instance-id: IID\n"})
+
+        sys_cfg = {'datasource': {'NoCloud': {'fs_label': None}}}
+
+        self.mocks.enter_context(
+            mock.patch.object(util, 'is_FreeBSD', return_value=True))
+
+        self.mocks.enter_context(
+            mock.patch.object(os.path, 'exists', return_value=True))
+
+        dsrc = dsNoCloud(sys_cfg=sys_cfg, distro=None, paths=self.paths)
+        ret = dsrc._get_devices('foo')
+        self.assertEqual(['/dev/msdosfs/foo', '/dev/iso9660/foo'], ret)
+        fake_blkid.assert_not_called()
 
 
 class TestParseCommandLineData(CiTestCase):
@@ -258,8 +318,7 @@ class TestParseCommandLineData(CiTestCase):
         for (fmt, expected) in pairs:
             fill = {}
             cmdline = fmt % {'ds_id': ds_id}
-            ret = DataSourceNoCloud.parse_cmdline_data(ds_id=ds_id, fill=fill,
-                                                       cmdline=cmdline)
+            ret = parse_cmdline_data(ds_id=ds_id, fill=fill, cmdline=cmdline)
             self.assertEqual(expected, fill)
             self.assertTrue(ret)
 
@@ -276,10 +335,43 @@ class TestParseCommandLineData(CiTestCase):
 
         for cmdline in cmdlines:
             fill = {}
-            ret = DataSourceNoCloud.parse_cmdline_data(ds_id=ds_id, fill=fill,
-                                                       cmdline=cmdline)
+            ret = parse_cmdline_data(ds_id=ds_id, fill=fill, cmdline=cmdline)
             self.assertEqual(fill, {})
             self.assertFalse(ret)
+
+
+class TestMaybeRemoveToplevelNetwork(CiTestCase):
+    """test _maybe_remove_top_network function."""
+    basecfg = [{'type': 'physical', 'name': 'interface0',
+                'subnets': [{'type': 'dhcp'}]}]
+
+    def test_should_remove_safely(self):
+        mcfg = {'config': self.basecfg, 'version': 1}
+        self.assertEqual(mcfg, _maybe_remove_top_network({'network': mcfg}))
+
+    def test_no_remove_if_other_keys(self):
+        """should not shift if other keys at top level."""
+        mcfg = {'network': {'config': self.basecfg, 'version': 1},
+                'unknown_keyname': 'keyval'}
+        self.assertEqual(mcfg, _maybe_remove_top_network(mcfg))
+
+    def test_no_remove_if_non_dict(self):
+        """should not shift if not a dict."""
+        mcfg = {'network': '"content here'}
+        self.assertEqual(mcfg, _maybe_remove_top_network(mcfg))
+
+    def test_no_remove_if_missing_config_or_version(self):
+        """should not shift unless network entry has config and version."""
+        mcfg = {'network': {'config': self.basecfg}}
+        self.assertEqual(mcfg, _maybe_remove_top_network(mcfg))
+
+        mcfg = {'network': {'version': 1}}
+        self.assertEqual(mcfg, _maybe_remove_top_network(mcfg))
+
+    def test_remove_with_config_disabled(self):
+        """network/config=disabled should be shifted."""
+        mcfg = {'config': 'disabled'}
+        self.assertEqual(mcfg, _maybe_remove_top_network({'network': mcfg}))
 
 
 # vi: ts=4 expandtab

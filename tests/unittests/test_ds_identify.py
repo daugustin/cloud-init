@@ -138,6 +138,10 @@ class DsIdentifyBase(CiTestCase):
             {'name': 'detect_virt', 'RET': 'none', 'ret': 1},
             {'name': 'uname', 'out': UNAME_MYSYS},
             {'name': 'blkid', 'out': BLKID_EFI_ROOT},
+            {'name': 'ovf_vmware_transport_guestinfo',
+             'out': 'No value found', 'ret': 1},
+            {'name': 'dmi_decode', 'ret': 1,
+             'err': 'No dmidecode program. ERROR.'},
         ]
 
         written = [d['name'] for d in mocks]
@@ -192,6 +196,10 @@ class DsIdentifyBase(CiTestCase):
         return self._check_via_dict(
             data, RC_FOUND, dslist=[data.get('ds'), DS_NONE])
 
+    def _test_ds_not_found(self, name):
+        data = copy.deepcopy(VALID_CFG[name])
+        return self._check_via_dict(data, RC_NOT_FOUND)
+
     def _check_via_dict(self, data, rc, dslist=None, **kwargs):
         ret = self._call_via_dict(data, **kwargs)
         good = False
@@ -241,8 +249,12 @@ class TestDsIdentify(DsIdentifyBase):
         self._test_ds_found('Ec2-xen')
 
     def test_brightbox_is_ec2(self):
-        """EC2: product_serial ends with 'brightbox.com'"""
+        """EC2: product_serial ends with '.brightbox.com'"""
         self._test_ds_found('Ec2-brightbox')
+
+    def test_bobrightbox_is_not_brightbox(self):
+        """EC2: bobrightbox.com in product_serial is not brightbox'"""
+        self._test_ds_not_found('Ec2-brightbox-negative')
 
     def test_gce_by_product_name(self):
         """GCE identifies itself with product_name."""
@@ -256,10 +268,13 @@ class TestDsIdentify(DsIdentifyBase):
         """ConfigDrive datasource has a disk with LABEL=config-2."""
         self._test_ds_found('ConfigDrive')
 
+    def test_rbx_cloud(self):
+        """Rbx datasource has a disk with LABEL=CLOUDMD."""
+        self._test_ds_found('RbxCloud')
+
     def test_config_drive_upper(self):
         """ConfigDrive datasource has a disk with LABEL=CONFIG-2."""
         self._test_ds_found('ConfigDriveUpper')
-        return
 
     def test_config_drive_seed(self):
         """Config Drive seed directory."""
@@ -432,13 +447,25 @@ class TestDsIdentify(DsIdentifyBase):
         """Open Telecom identification."""
         self._test_ds_found('OpenStack-OpenTelekom')
 
+    def test_openstack_sap_ccloud(self):
+        """SAP Converged Cloud identification"""
+        self._test_ds_found('OpenStack-SAPCCloud')
+
+    def test_openstack_asset_tag_nova(self):
+        """OpenStack identification via asset tag OpenStack Nova."""
+        self._test_ds_found('OpenStack-AssetTag-Nova')
+
+    def test_openstack_asset_tag_copute(self):
+        """OpenStack identification via asset tag OpenStack Compute."""
+        self._test_ds_found('OpenStack-AssetTag-Compute')
+
     def test_openstack_on_non_intel_is_maybe(self):
         """On non-Intel, openstack without dmi info is maybe.
 
         nova does not identify itself on platforms other than intel.
            https://bugs.launchpad.net/cloud-init/+bugs?field.tag=dsid-nova"""
 
-        data = VALID_CFG['OpenStack'].copy()
+        data = copy.deepcopy(VALID_CFG['OpenStack'])
         del data['files'][P_PRODUCT_NAME]
         data.update({'policy_dmi': POLICY_FOUND_OR_MAYBE,
                      'policy_no_dmi': POLICY_FOUND_OR_MAYBE})
@@ -475,6 +502,10 @@ class TestDsIdentify(DsIdentifyBase):
         """OVF is identified when iso9660 cdrom path contains ovf schema."""
         self._test_ds_found('OVF')
 
+    def test_ovf_on_vmware_guestinfo_found(self):
+        """OVF guest info is found on vmware."""
+        self._test_ds_found('OVF-guestinfo')
+
     def test_ovf_on_vmware_iso_found_when_vmware_customization(self):
         """OVF is identified when vmware customization is enabled."""
         self._test_ds_found('OVF-vmware-customization')
@@ -499,7 +530,7 @@ class TestDsIdentify(DsIdentifyBase):
 
         # Add recognized labels
         valid_ovf_labels = ['ovf-transport', 'OVF-TRANSPORT',
-                            "OVFENV", "ovfenv"]
+                            "OVFENV", "ovfenv", "OVF ENV", "ovf env"]
         for valid_ovf_label in valid_ovf_labels:
             ovf_cdrom_by_label['mocks'][0]['out'] = blkid_out([
                 {'DEVNAME': 'sda1', 'TYPE': 'ext4', 'LABEL': 'rootfs'},
@@ -509,9 +540,37 @@ class TestDsIdentify(DsIdentifyBase):
             self._check_via_dict(
                 ovf_cdrom_by_label, rc=RC_FOUND, dslist=['OVF', DS_NONE])
 
+    def test_ovf_on_vmware_iso_found_by_cdrom_with_different_size(self):
+        """OVF is identified by well-known iso9660 labels."""
+        ovf_cdrom_with_size = copy.deepcopy(VALID_CFG['OVF'])
+
+        # Set cdrom size to 20480 (10MB in 512 byte units)
+        ovf_cdrom_with_size['files']['sys/class/block/sr0/size'] = '20480\n'
+        self._check_via_dict(
+            ovf_cdrom_with_size, rc=RC_NOT_FOUND, policy_dmi="disabled")
+
+        # Set cdrom size to 204800 (100MB in 512 byte units)
+        ovf_cdrom_with_size['files']['sys/class/block/sr0/size'] = '204800\n'
+        self._check_via_dict(
+            ovf_cdrom_with_size, rc=RC_NOT_FOUND, policy_dmi="disabled")
+
+        # Set cdrom size to 18432 (9MB in 512 byte units)
+        ovf_cdrom_with_size['files']['sys/class/block/sr0/size'] = '18432\n'
+        self._check_via_dict(
+            ovf_cdrom_with_size, rc=RC_FOUND, dslist=['OVF', DS_NONE])
+
+        # Set cdrom size to 2048 (1MB in 512 byte units)
+        ovf_cdrom_with_size['files']['sys/class/block/sr0/size'] = '2048\n'
+        self._check_via_dict(
+            ovf_cdrom_with_size, rc=RC_FOUND, dslist=['OVF', DS_NONE])
+
     def test_default_nocloud_as_vdb_iso9660(self):
         """NoCloud is found with iso9660 filesystem on non-cdrom disk."""
         self._test_ds_found('NoCloud')
+
+    def test_nocloud_upper(self):
+        """NoCloud is found with uppercase filesystem label."""
+        self._test_ds_found('NoCloudUpper')
 
     def test_nocloud_seed(self):
         """Nocloud seed directory."""
@@ -557,6 +616,33 @@ class TestDsIdentify(DsIdentifyBase):
         expected = ["/sbin", "/bin", "/usr/sbin", "/usr/bin", "/mycust/path"]
         self.assertEqual(expected, [p for p in expected if p in toks],
                          "path did not have expected tokens")
+
+    def test_zstack_is_ec2(self):
+        """EC2: chassis asset tag ends with 'zstack.io'"""
+        self._test_ds_found('Ec2-ZStack')
+
+    def test_e24cloud_is_ec2(self):
+        """EC2: e24cloud identified by sys_vendor"""
+        self._test_ds_found('Ec2-E24Cloud')
+
+    def test_e24cloud_not_active(self):
+        """EC2: bobrightbox.com in product_serial is not brightbox'"""
+        self._test_ds_not_found('Ec2-E24Cloud-negative')
+
+
+class TestBSDNoSys(DsIdentifyBase):
+    """Test *BSD code paths
+
+    FreeBSD doesn't have /sys so we use dmidecode(8) here
+    It also doesn't have systemd-detect-virt(8), so we use sysctl(8) to query
+    kern.vm_guest, and optionally map it"""
+
+    def test_dmi_decode(self):
+        """Test that dmidecode(8) works on systems which don't have /sys
+
+        This will be used on *BSD systems.
+        """
+        self._test_ds_found('Hetzner-dmidecode')
 
 
 class TestIsIBMProvisioning(DsIdentifyBase):
@@ -681,7 +767,11 @@ VALID_CFG = {
     },
     'Ec2-brightbox': {
         'ds': 'Ec2',
-        'files': {P_PRODUCT_SERIAL: 'facc6e2f.brightbox.com\n'},
+        'files': {P_PRODUCT_SERIAL: 'srv-otuxg.gb1.brightbox.com\n'},
+    },
+    'Ec2-brightbox-negative': {
+        'ds': 'Ec2',
+        'files': {P_PRODUCT_SERIAL: 'tricky-host.bobrightbox.com\n'},
     },
     'GCE': {
         'ds': 'GCE',
@@ -701,6 +791,19 @@ VALID_CFG = {
              'out': blkid_out(
                  BLKID_UEFI_UBUNTU +
                  [{'DEVNAME': 'vdb', 'TYPE': 'iso9660', 'LABEL': 'cidata'}])},
+        ],
+        'files': {
+            'dev/vdb': 'pretend iso content for cidata\n',
+        }
+    },
+    'NoCloudUpper': {
+        'ds': 'NoCloud',
+        'mocks': [
+            MOCK_VIRT_IS_KVM,
+            {'name': 'blkid', 'ret': 0,
+             'out': blkid_out(
+                 BLKID_UEFI_UBUNTU +
+                 [{'DEVNAME': 'vdb', 'TYPE': 'iso9660', 'LABEL': 'CIDATA'}])},
         ],
         'files': {
             'dev/vdb': 'pretend iso content for cidata\n',
@@ -733,6 +836,24 @@ VALID_CFG = {
         # OTC gen1 (Xen) hosts use OpenStack datasource, LP: #1756471
         'ds': 'OpenStack',
         'files': {P_CHASSIS_ASSET_TAG: 'OpenTelekomCloud\n'},
+        'mocks': [MOCK_VIRT_IS_XEN],
+    },
+    'OpenStack-SAPCCloud': {
+        # SAP CCloud hosts use OpenStack on VMware
+        'ds': 'OpenStack',
+        'files': {P_CHASSIS_ASSET_TAG: 'SAP CCloud VM\n'},
+        'mocks': [MOCK_VIRT_IS_VMWARE],
+    },
+    'OpenStack-AssetTag-Nova': {
+        # VMware vSphere can't modify product-name, LP: #1669875
+        'ds': 'OpenStack',
+        'files': {P_CHASSIS_ASSET_TAG: 'OpenStack Nova\n'},
+        'mocks': [MOCK_VIRT_IS_XEN],
+    },
+    'OpenStack-AssetTag-Compute': {
+        # VMware vSphere can't modify product-name, LP: #1669875
+        'ds': 'OpenStack',
+        'files': {P_CHASSIS_ASSET_TAG: 'OpenStack Compute\n'},
         'mocks': [MOCK_VIRT_IS_XEN],
     },
     'OVF-seed': {
@@ -771,7 +892,16 @@ VALID_CFG = {
         ],
         'files': {
             'dev/sr0': 'pretend ovf iso has ' + OVF_MATCH_STRING + '\n',
+            'sys/class/block/sr0/size': '2048\n',
         }
+    },
+    'OVF-guestinfo': {
+        'ds': 'OVF',
+        'mocks': [
+            {'name': 'ovf_vmware_transport_guestinfo', 'ret': 0,
+             'out': '<?xml version="1.0" encoding="UTF-8"?>\n<Environment'},
+            MOCK_VIRT_IS_VMWARE,
+        ],
     },
     'ConfigDrive': {
         'ds': 'ConfigDrive',
@@ -803,9 +933,27 @@ VALID_CFG = {
             os.path.join(P_SEED_DIR, 'config_drive', 'openstack',
                          'latest', 'meta_data.json'): 'md\n'},
     },
+    'RbxCloud': {
+        'ds': 'RbxCloud',
+        'mocks': [
+            {'name': 'blkid', 'ret': 0,
+             'out': blkid_out(
+                 [{'DEVNAME': 'vda1', 'TYPE': 'vfat', 'PARTUUID': uuid4()},
+                  {'DEVNAME': 'vda2', 'TYPE': 'ext4',
+                   'LABEL': 'cloudimg-rootfs', 'PARTUUID': uuid4()},
+                  {'DEVNAME': 'vdb', 'TYPE': 'vfat', 'LABEL': 'CLOUDMD'}]
+             )},
+        ],
+    },
     'Hetzner': {
         'ds': 'Hetzner',
         'files': {P_SYS_VENDOR: 'Hetzner\n'},
+    },
+    'Hetzner-dmidecode': {
+        'ds': 'Hetzner',
+        'mocks': [
+            {'name': 'dmi_decode', 'ret': 0, 'RET': 'Hetzner'}
+        ],
     },
     'IBMCloud-metadata': {
         'ds': 'IBMCloud',
@@ -882,8 +1030,19 @@ VALID_CFG = {
             {'name': 'blkid', 'ret': 2, 'out': ''},
         ],
         'files': {ds_smartos.METADATA_SOCKFILE: 'would be a socket\n'},
-    }
-
+    },
+    'Ec2-ZStack': {
+        'ds': 'Ec2',
+        'files': {P_CHASSIS_ASSET_TAG: '123456.zstack.io\n'},
+    },
+    'Ec2-E24Cloud': {
+        'ds': 'Ec2',
+        'files': {P_SYS_VENDOR: 'e24cloud\n'},
+     },
+    'Ec2-E24Cloud-negative': {
+        'ds': 'Ec2',
+        'files': {P_SYS_VENDOR: 'e24cloudyday\n'},
+     }
 }
 
 # vi: ts=4 expandtab
